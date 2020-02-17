@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import List
 import socket
 from enum import Enum
 
@@ -44,23 +45,20 @@ EXAMPLE: #OK:1424,0.523498657#
 
 ERROR: Command could not be executed. The current state is provided as payload. Also an error message is provided as string
 FORMAT: #ERROR:<mote_x>,<error_message>#
-EXAMPLE: #ERROR:1224,"Interrupted by Signal SIGINT"#
+EXAMPLE: #ERROR:1224,Interrupted by Signal SIGINT#
 """
 
 SYM_HEAD = '#'
 SYM_TAIL = '#'
 
 
-class DingNetMessage:
+class Configuration:
 
-    _message_header = {
-        1: "INIT:",
-        2: "ACTION:",
-        3: "RESET:",
-        4: "END:",
-        5: "OK:",
-        6: "ERROR:",
-    }
+    def __init__(self, tp_begin, tp_end, sf_begin, sf_end, sr_begin, sr_end):
+        self.range = [tp_begin, tp_end, sf_begin, sf_end, sr_begin, sf_end]
+
+
+class DingNetMessage:
 
     class Type(Enum):
         INIT = 1
@@ -69,6 +67,15 @@ class DingNetMessage:
         END = 4
         OK = 5
         ERROR = 6
+
+    _message_header = {
+        Type.INIT: "INIT:",
+        Type.ACTION: "ACTION:",
+        Type.RESET: "RESET:",
+        Type.END: "END:",
+        Type.OK: "OK:",
+        Type.ERROR: "ERROR:",
+    }
 
     """
     Given the type and payload of the message, retuns the bytes to send to the stream
@@ -81,13 +88,17 @@ class DingNetMessage:
     Decodes bytes of a message. Retuns the message type, the observation and the error if an error occured
     """
     @staticmethod
-    def decode(message: str):
+    def decode(message: bytes):
         msg_str = message.decode()
         error_msg = None
         assert msg_str[0] == '#' and msg_str[-1] == '#'
-        [msg_type, payload] = message[1:-1].split(':')
-        observation = Observation.from_payload(
-            payload) if len(payload) > 0 else None
+        [msg_type, payload] = msg_str[1:-1].split(':')
+        if msg_type != 'ERROR':
+            observation = Observation.from_payload(payload)
+        else:
+            error_payload = payload.split(',')
+            observation = Observation.from_payload(error_payload[0] + ',0')
+            error_msg = error_payload[1]
         return msg_type, observation, error_msg
 
 
@@ -95,6 +106,8 @@ class Action:
 
     @staticmethod
     def from_payload(payload: str):
+        if not payload:
+            return None
         params = payload.split(',')
         return Action(int(params[0]), int(params[1]), int(params[2]))
 
@@ -118,39 +131,42 @@ class Observation:
         self.xpos = xpos
         self.reward = reward
 
+    def __eq__(self, other):
+        return self.xpos == other.xpos and self.reward == other.reward
+
     def to_payload(self) -> str:
         return f"{self.xpos},{self.reward}"
 
 
 class DingNetConnection():
 
-    def __init__(self, host="localhost", port="9002"):
+    def __init__(self, senddevice=socket.socket(), host="localhost", port="9002"):
         self._host = host
         self._port = port
-        self.socket = socket.socket()
+        self.senddevice = senddevice
 
     def connect(self):
         successful = False
-        self.socket.connect((self._host, self._port))
+        self.senddevice.connect((self._host, self._port))
         return successful
 
-    def init_env(self, range_str: str):
-        self.socket.send(DingNetMessage.encode(
-            DingNetMessage.Type.INIT, range_str
+    def init_env(self, range: List[int]):
+        self.senddevice.send(DingNetMessage.encode(
+            DingNetMessage.Type.INIT, str(range)[1:-1].replace(" ", "")
         ))
 
     def send_action(self, action: Action):
-        self.socket.send(DingNetMessage.encode(
+        self.senddevice.send(DingNetMessage.encode(
             DingNetMessage.Type.ACTION, action.to_payload()
         ))
 
     def reset(self):
-        self.socket.send(DingNetMessage.encode(
+        self.senddevice.send(DingNetMessage.encode(
             DingNetMessage.Type.RESET
         ))
 
     def get_observation(self) -> Observation:
-        message = self.socket.recv()
+        message = self.senddevice.recv()
         msg_type, observation, error = DingNetMessage.decode(message)
         if msg_type == DingNetMessage.Type.ERROR:
             print(error)
@@ -161,8 +177,7 @@ class DingNetConnection():
             raise Exception("DingNet Protocoal Violation")
 
     def close(self):
-        self.socket.send(DingNetMessage.encode(
+        self.senddevice.send(DingNetMessage.encode(
             DingNetMessage.Type.END
         ))
-        self.socket.close()
-
+        self.senddevice.close()
