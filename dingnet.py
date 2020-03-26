@@ -2,7 +2,7 @@ import gym
 import gym_dingnet
 from stable_baselines import PPO2
 from gym_dingnet.logging import log
-env = gym.make("dingnet-sr-v0")
+env = gym.make("dingnet-sr-tp-v0")
 print("training")
 model = PPO2('MlpLstmPolicy', env, verbose=0, nminibatches=1).learn(50000000,)
 print("done training")
